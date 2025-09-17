@@ -1,48 +1,57 @@
 package com.code4galaxy.compose_cards.ui
 
+import androidx.compose.foundation.ExperimentalFoundationApi
+import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Box
-import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.layout.PaddingValues
+import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
-import androidx.compose.foundation.layout.offset
+import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.LazyRow
+import androidx.compose.foundation.lazy.itemsIndexed
+import androidx.compose.foundation.lazy.rememberLazyListState
+import androidx.compose.foundation.shape.CircleShape
+import androidx.compose.foundation.shape.RoundedCornerShape
+// Snap fling not available in this Compose version; we'll implement manual snapping
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.derivedStateOf
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
+import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.unit.dp
-import androidx.compose.foundation.layout.padding
+import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.graphicsLayer
+import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.text.input.TextFieldValue
+import androidx.compose.ui.tooling.preview.Preview
+import androidx.compose.ui.unit.dp
+import androidx.compose.ui.zIndex
+import com.code4galaxy.compose_cards.data.CardRepository
 import androidx.compose.material.Text
 import androidx.compose.material.Button
 import androidx.compose.material.ButtonDefaults
 import androidx.compose.material.MaterialTheme
-import androidx.compose.foundation.layout.fillMaxWidth
-import androidx.compose.ui.graphics.graphicsLayer
-import androidx.compose.ui.zIndex
-import androidx.compose.animation.core.animateFloatAsState
-import com.code4galaxy.compose_cards.data.CardRepository
-import androidx.compose.foundation.gestures.detectHorizontalDragGestures
-import androidx.compose.ui.Alignment
-import androidx.compose.foundation.layout.size
-import androidx.compose.foundation.background
-import androidx.compose.ui.graphics.Color
-import androidx.compose.foundation.shape.CircleShape
-import androidx.compose.ui.input.pointer.pointerInput
-import androidx.compose.ui.tooling.preview.Preview
+import kotlinx.coroutines.launch
+import androidx.compose.runtime.rememberCoroutineScope
 
+@OptIn(ExperimentalFoundationApi::class)
 @Composable
 fun SavedCardsScreen(
     savedCards: List<List<TextFieldValue>>,
     onAddNewCard: () -> Unit
 ) {
-    LazyColumn(modifier = Modifier.padding(top = 16.dp, start = 16.dp, end = 16.dp)) {
+    LazyColumn(modifier = Modifier.padding(top = 16.dp)) {
         item {
             val cardHeight = 200.dp
-            val centerWidthFraction = 0.88f
-            val sideVisible = 32.dp
+            val centerWidthFraction = 0.76f
+            val sideVisible = 16.dp
             var selectedIndex by remember { mutableStateOf(0) }
 
             androidx.compose.foundation.layout.BoxWithConstraints(
@@ -50,90 +59,98 @@ fun SavedCardsScreen(
                     .fillMaxWidth()
                     .height(cardHeight + 72.dp),
             ) {
-                var dragX by remember { mutableStateOf(0f) }
-                val threshold = 72f
-
+                val listState = rememberLazyListState(initialFirstVisibleItemIndex = selectedIndex)
                 val parentWidth = this.maxWidth
-                val centerWidth = parentWidth * centerWidthFraction
-                val parentHalf = parentWidth / 2
-                val centerHalf = centerWidth / 2
+                val itemWidth = parentWidth * centerWidthFraction
+                val spacing = 0.dp
+                val peek = 24.dp
+                val centerPadding = (parentWidth - itemWidth) / 2
+                val peekShown = (centerPadding - 50.dp).coerceAtMost(peek).coerceAtLeast(0.dp)
+                val edgePadding = (centerPadding - peekShown)
+                val density = LocalDensity.current
+                val scope = rememberCoroutineScope()
 
-                val rightTargetCenter = (parentWidth - sideVisible) + centerHalf
-                val leftTargetCenter = (sideVisible - centerHalf)
-                val rightShift = (rightTargetCenter - parentHalf)
-                val leftShift = (parentHalf - leftTargetCenter)
-
-                savedCards.forEachIndexed { index, card ->
-                    val rel = index - selectedIndex
-                    val clamped = rel.coerceIn(-1, 1)
-                    val distance = kotlin.math.abs(rel)
-                    val baseX = when {
-                        clamped > 0 -> rightShift
-                        clamped < 0 -> -leftShift
-                        else -> 0.dp
-                    }
-                    val scale by animateFloatAsState(if (clamped == 0) 1f else 0.98f, label = "")
-                    val alpha = if (distance <= 1) 1f else 0f
-
-                    Box(
-                        modifier = Modifier
-                            .offset(x = baseX)
-                            .align(Alignment.Center)
-                            .fillMaxWidth(centerWidthFraction)
-                            .graphicsLayer {
-                                shape = RoundedCornerShape(20.dp)
-                                clip = true
-                                scaleX = scale
-                                scaleY = scale
-                                this.alpha = alpha
-                            }
-                            .zIndex((100 - distance).toFloat())
-                            .clickable { selectedIndex = index }
-                            .pointerInput(selectedIndex, savedCards.size) {
-                                detectHorizontalDragGestures(
-                                    onHorizontalDrag = { change, dragAmount ->
-                                        change.consume()
-                                        dragX += dragAmount
-                                    },
-                                    onDragEnd = {
-                                        when {
-                                            dragX > threshold && selectedIndex > 0 -> selectedIndex -= 1
-                                            dragX < -threshold && selectedIndex < savedCards.lastIndex -> selectedIndex += 1
-                                        }
-                                        dragX = 0f
-                                    }
-                                )
-                            }
-                    ) {
-                        CreditCard(
-                            cardNumber = card[0],
-                            holderName = card[1],
-                            expiryDate = card[2],
-                            cardCVV = card[3]
-                        )
+                val centeredIndex by remember {
+                    derivedStateOf {
+                        val layout = listState.layoutInfo
+                        val center = (layout.viewportEndOffset + layout.viewportStartOffset) / 2f
+                        val closest = layout.visibleItemsInfo.minByOrNull { info ->
+                            val itemCenter = info.offset + info.size / 2f
+                            kotlin.math.abs(itemCenter - center)
+                        }
+                        closest?.index ?: selectedIndex
                     }
                 }
 
-                Box(
-                    modifier = Modifier
-                        .align(Alignment.Center)
-                        .matchParentSize()
-                        .pointerInput(selectedIndex, savedCards.size) {
-                            detectHorizontalDragGestures(
-                                onHorizontalDrag = { change, dragAmount ->
-                                    change.consume()
-                                    dragX += dragAmount
-                                },
-                                onDragEnd = {
-                                    when {
-                                        dragX > threshold && selectedIndex > 0 -> selectedIndex -= 1
-                                        dragX < -threshold && selectedIndex < savedCards.lastIndex -> selectedIndex += 1
-                                    }
-                                    dragX = 0f
+                LaunchedEffect(centeredIndex) {
+                    selectedIndex = centeredIndex
+                }
+
+                LazyRow(
+                    state = listState,
+                    contentPadding = PaddingValues(horizontal = edgePadding),
+                    horizontalArrangement = androidx.compose.foundation.layout.Arrangement.spacedBy(spacing),
+                    modifier = Modifier.align(Alignment.Center)
+                ) {
+                    itemsIndexed(savedCards, key = { i, _ -> i }) { index, card ->
+                        val scale by remember {
+                            derivedStateOf {
+                                val layout = listState.layoutInfo
+                                val info = layout.visibleItemsInfo.find { it.index == index }
+                                if (info != null) {
+                                    val center = (layout.viewportEndOffset + layout.viewportStartOffset) / 2f
+                                    val itemCenter = info.offset + info.size / 2f
+                                    val dist = kotlin.math.abs(itemCenter - center)
+                                    val norm = (dist / info.size).coerceIn(0f, 1f)
+                                    0.95f + (1f - norm) * 0.05f
+                                } else 0.95f
+                            }
+                        }
+
+                        Box(
+                            modifier = Modifier
+                                .width(itemWidth)
+                                .height(cardHeight)
+                                .graphicsLayer {
+                                    shape = RoundedCornerShape(20.dp)
+                                    clip = true
+                                    scaleX = scale
+                                    scaleY = scale
                                 }
+                                .zIndex(if (index == selectedIndex) 2f else 1f)
+                                .clickable {
+                                    if (index != selectedIndex) {
+                                        val peekShownPx = with(density) { (centerPadding - edgePadding).toPx() }
+                                        val offset = -peekShownPx.toInt()
+                                        scope.launch {
+                                            listState.animateScrollToItem(index, offset)
+                                            selectedIndex = index
+                                        }
+                                    }
+                                }
+                        ) {
+                            CreditCard(
+                                cardNumber = card[0],
+                                holderName = card[1],
+                                expiryDate = card[2],
+                                cardCVV = card[3]
                             )
                         }
-                )
+                    }
+                }
+
+                // Snap to the nearest item when scroll settles, centering it in viewport
+                LaunchedEffect(listState.isScrollInProgress, centeredIndex) {
+                    if (!listState.isScrollInProgress) {
+                        val peekShownPx = with(density) { (centerPadding - edgePadding).toPx() }
+                        // Shift left by visible peek so item center aligns with viewport center
+                        val offset = -peekShownPx.toInt()
+                        listState.animateScrollToItem(centeredIndex, offset)
+                        selectedIndex = centeredIndex
+                    }
+                }
+
+                // Background gesture catcher removed; swipe handled by swipeable overlay.
 
                 androidx.compose.foundation.layout.Row(
                     verticalAlignment = Alignment.CenterVertically,
